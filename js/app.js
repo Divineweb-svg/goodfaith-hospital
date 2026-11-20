@@ -1,5 +1,5 @@
 // ============================================
-// Goodfaith Hospital Ltd - Public Website JS (Safe Hybrid)
+// Goodfaith Hospital Ltd - Public Website JS (Full Cloud Sync)
 // ============================================
 
 const FIREBASE_PROJECT_ID = "goodfaith-hospital";
@@ -18,12 +18,12 @@ const DEFAULT_SETTINGS = {
 };
 
 const DEFAULT_DOCTORS = [
-    { id: 1, name: "Dr. Amara Okeke", specialty: "Consultant Cardiologist", phone: "08012345671", bio: "Expert in heart-related conditions with over 12 years experience." },
-    { id: 2, name: "Dr. Chinedu Eze", specialty: "Orthopedic Surgeon", phone: "08012345672", bio: "Specializes in bone, joint and sports injuries." },
-    { id: 3, name: "Dr. Fatima Bello", specialty: "Pediatrician", phone: "08012345673", bio: "Dedicated to the health and wellness of children." },
-    { id: 4, name: "Dr. Tunde Adebayo", specialty: "Consultant Neurologist", phone: "08012345674", bio: "Expert in brain and nervous system disorders." },
-    { id: 5, name: "Dr. Ngozi Nwosu", specialty: "Obstetrician & Gynecologist", phone: "08012345675", bio: "Specialist in women's health and maternity care." },
-    { id: 6, name: "Dr. Ibrahim Yusuf", specialty: "General Physician", phone: "08012345676", bio: "First point of care for general health concerns." }
+    { id: "1", name: "Dr. Amara Okeke", specialty: "Consultant Cardiologist", phone: "08012345671", bio: "Expert in heart-related conditions with over 12 years experience." },
+    { id: "2", name: "Dr. Chinedu Eze", specialty: "Orthopedic Surgeon", phone: "08012345672", bio: "Specializes in bone, joint and sports injuries." },
+    { id: "3", name: "Dr. Fatima Bello", specialty: "Pediatrician", phone: "08012345673", bio: "Dedicated to the health and wellness of children." },
+    { id: "4", name: "Dr. Tunde Adebayo", specialty: "Consultant Neurologist", phone: "08012345674", bio: "Expert in brain and nervous system disorders." },
+    { id: "5", name: "Dr. Ngozi Nwosu", specialty: "Obstetrician & Gynecologist", phone: "08012345675", bio: "Specialist in women's health and maternity care." },
+    { id: "6", name: "Dr. Ibrahim Yusuf", specialty: "General Physician", phone: "08012345676", bio: "First point of care for general health concerns." }
 ];
 
 function initData() {
@@ -55,6 +55,54 @@ function getAppointments() {
 
 function saveAppointments(appointments) {
     localStorage.setItem('gf_appointments', JSON.stringify(appointments));
+}
+
+async function fetchPublicCloudData() {
+    try {
+        const [settingsRes, doctorsRes] = await Promise.all([
+            fetch(`${FIRESTORE_URL}/settings/hospital`),
+            fetch(`${FIRESTORE_URL}/doctors`)
+        ]);
+
+        if (settingsRes.ok) {
+            const doc = await settingsRes.json();
+            if (doc.fields) {
+                const f = doc.fields;
+                const cloudSettings = {
+                    name: f.name?.stringValue || DEFAULT_SETTINGS.name,
+                    phone: f.phone?.stringValue || DEFAULT_SETTINGS.phone,
+                    whatsapp: f.whatsapp?.stringValue || DEFAULT_SETTINGS.whatsapp,
+                    address: f.address?.stringValue || DEFAULT_SETTINGS.address,
+                    hours: f.hours?.stringValue || DEFAULT_SETTINGS.hours,
+                    bankName: f.bankName?.stringValue || DEFAULT_SETTINGS.bankName,
+                    accountName: f.accountName?.stringValue || DEFAULT_SETTINGS.accountName,
+                    accountNumber: f.accountNumber?.stringValue || DEFAULT_SETTINGS.accountNumber
+                };
+                localStorage.setItem('gf_settings', JSON.stringify(cloudSettings));
+                applySettings();
+            }
+        }
+
+        if (doctorsRes.ok) {
+            const data = await doctorsRes.json();
+            if (data.documents && data.documents.length > 0) {
+                const cloudDoctors = data.documents.map(doc => {
+                    const f = doc.fields || {};
+                    return {
+                        id: doc.name.split('/').pop(),
+                        name: f.name?.stringValue || '',
+                        specialty: f.specialty?.stringValue || '',
+                        phone: f.phone?.stringValue || '',
+                        bio: f.bio?.stringValue || ''
+                    };
+                });
+                localStorage.setItem('gf_doctors', JSON.stringify(cloudDoctors));
+                renderDoctors();
+            }
+        }
+    } catch (e) {
+        console.log("Using cached hospital data:", e);
+    }
 }
 
 async function sendAppointmentToFirebase(appointment) {
@@ -213,7 +261,6 @@ function setupAppointmentForm() {
         appointments.unshift(appointment);
         saveAppointments(appointments);
 
-        // Send to Firebase in the background
         await sendAppointmentToFirebase(appointment);
 
         const successEl = document.getElementById('formSuccess');
@@ -269,4 +316,5 @@ document.addEventListener('DOMContentLoaded', function() {
     setupAppointmentForm();
     setupMobileMenu();
     setMinDate();
+    fetchPublicCloudData(); // Pull latest doctors & settings from Firebase
 });

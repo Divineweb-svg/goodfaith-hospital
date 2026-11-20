@@ -1,22 +1,33 @@
 // ============================================
-// Goodfaith Hospital Ltd - Admin Panel JS (Safe Hybrid)
+// Goodfaith Hospital Ltd - Admin Panel JS (Full Cloud Sync)
 // ============================================
 
 const FIREBASE_PROJECT_ID = "goodfaith-hospital";
 const FIRESTORE_URL = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents`;
 
+const DEFAULT_SETTINGS = {
+    name: "Goodfaith Hospital Ltd",
+    phone: "+234 800 000 0000",
+    whatsapp: "2348000000000",
+    address: "Lagos, Nigeria",
+    hours: "Mon - Sat: 8:00 AM - 6:00 PM",
+    password: "admin123",
+    bankName: "Zenith Bank",
+    accountName: "Goodfaith Hospital Ltd",
+    accountNumber: "1234567890"
+};
+
+const DEFAULT_DOCTORS = [
+    { id: "1", name: "Dr. Amara Okeke", specialty: "Consultant Cardiologist", phone: "08012345671", bio: "Expert in heart-related conditions with over 12 years experience." },
+    { id: "2", name: "Dr. Chinedu Eze", specialty: "Orthopedic Surgeon", phone: "08012345672", bio: "Specializes in bone, joint and sports injuries." },
+    { id: "3", name: "Dr. Fatima Bello", specialty: "Pediatrician", phone: "08012345673", bio: "Dedicated to the health and wellness of children." },
+    { id: "4", name: "Dr. Tunde Adebayo", specialty: "Consultant Neurologist", phone: "08012345674", bio: "Expert in brain and nervous system disorders." },
+    { id: "5", name: "Dr. Ngozi Nwosu", specialty: "Obstetrician & Gynecologist", phone: "08012345675", bio: "Specialist in women's health and maternity care." },
+    { id: "6", name: "Dr. Ibrahim Yusuf", specialty: "General Physician", phone: "08012345676", bio: "First point of care for general health concerns." }
+];
+
 function getSettings() {
-    return JSON.parse(localStorage.getItem('gf_settings')) || {
-        name: "Goodfaith Hospital Ltd",
-        phone: "+234 800 000 0000",
-        whatsapp: "2348000000000",
-        address: "Lagos, Nigeria",
-        hours: "Mon - Sat: 8:00 AM - 6:00 PM",
-        password: "admin123",
-        bankName: "Zenith Bank",
-        accountName: "Goodfaith Hospital Ltd",
-        accountNumber: "1234567890"
-    };
+    return JSON.parse(localStorage.getItem('gf_settings')) || DEFAULT_SETTINGS;
 }
 
 function saveSettings(settings) {
@@ -39,7 +50,111 @@ function saveAppointments(appointments) {
     localStorage.setItem('gf_appointments', JSON.stringify(appointments));
 }
 
-// Sync incoming online appointments from Firebase Firestore
+// ========== FIREBASE CLOUD SYNC FUNCTIONS ==========
+
+async function syncSettingsFromFirebase() {
+    try {
+        const res = await fetch(`${FIRESTORE_URL}/settings/hospital`);
+        if (!res.ok) return;
+        const doc = await res.json();
+        if (!doc.fields) return;
+
+        const f = doc.fields;
+        const cloudSettings = {
+            name: f.name?.stringValue || DEFAULT_SETTINGS.name,
+            phone: f.phone?.stringValue || DEFAULT_SETTINGS.phone,
+            whatsapp: f.whatsapp?.stringValue || DEFAULT_SETTINGS.whatsapp,
+            address: f.address?.stringValue || DEFAULT_SETTINGS.address,
+            hours: f.hours?.stringValue || DEFAULT_SETTINGS.hours,
+            password: f.password?.stringValue || DEFAULT_SETTINGS.password,
+            bankName: f.bankName?.stringValue || DEFAULT_SETTINGS.bankName,
+            accountName: f.accountName?.stringValue || DEFAULT_SETTINGS.accountName,
+            accountNumber: f.accountNumber?.stringValue || DEFAULT_SETTINGS.accountNumber
+        };
+        saveSettings(cloudSettings);
+        loadSettingsForm();
+    } catch (e) {
+        console.log("Using local settings:", e);
+    }
+}
+
+async function pushSettingsToFirebase(settings) {
+    try {
+        const fields = {};
+        for (const [key, val] of Object.entries(settings)) {
+            fields[key] = { stringValue: String(val) };
+        }
+        await fetch(`${FIRESTORE_URL}/settings/hospital`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields })
+        });
+    } catch (e) {
+        console.error("Failed to save settings to cloud:", e);
+    }
+}
+
+async function syncDoctorsFromFirebase() {
+    try {
+        const res = await fetch(`${FIRESTORE_URL}/doctors`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.documents && data.documents.length > 0) {
+            const cloudDoctors = data.documents.map(doc => {
+                const f = doc.fields || {};
+                const docId = doc.name.split('/').pop();
+                return {
+                    id: docId,
+                    name: f.name?.stringValue || '',
+                    specialty: f.specialty?.stringValue || '',
+                    phone: f.phone?.stringValue || '',
+                    bio: f.bio?.stringValue || ''
+                };
+            });
+            saveDoctors(cloudDoctors);
+            loadDoctorsTable();
+            loadOverview();
+        } else {
+            // Seed default doctors to Firebase if empty
+            const localDocs = getDoctors();
+            for (const doc of localDocs) {
+                await pushDoctorToFirebase(doc);
+            }
+        }
+    } catch (e) {
+        console.log("Using local doctors:", e);
+    }
+}
+
+async function pushDoctorToFirebase(doctor) {
+    try {
+        const docId = String(doctor.id);
+        await fetch(`${FIRESTORE_URL}/doctors/${docId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                fields: {
+                    name: { stringValue: doctor.name },
+                    specialty: { stringValue: doctor.specialty },
+                    phone: { stringValue: doctor.phone || '' },
+                    bio: { stringValue: doctor.bio || '' }
+                }
+            })
+        });
+    } catch (e) {
+        console.error("Failed to save doctor to cloud:", e);
+    }
+}
+
+async function deleteDoctorFromFirebase(id) {
+    try {
+        await fetch(`${FIRESTORE_URL}/doctors/${id}`, { method: 'DELETE' });
+    } catch (e) {
+        console.error("Failed to delete doctor from cloud:", e);
+    }
+}
+
 async function syncOnlineAppointments() {
     try {
         const res = await fetch(`${FIRESTORE_URL}/appointments`);
@@ -52,7 +167,6 @@ async function syncOnlineAppointments() {
             const docId = doc.name.split('/').pop();
             return {
                 id: docId,
-                firebaseId: docId,
                 name: f.name?.stringValue || 'Unknown',
                 phone: f.phone?.stringValue || '',
                 email: f.email?.stringValue || '',
@@ -66,11 +180,9 @@ async function syncOnlineAppointments() {
             };
         });
 
-        if (onlineAppointments.length > 0) {
-            saveAppointments(onlineAppointments);
-            loadAppointmentsTable();
-            loadOverview();
-        }
+        saveAppointments(onlineAppointments);
+        loadAppointmentsTable();
+        loadOverview();
     } catch (err) {
         console.log("Running with local appointments:", err);
     }
@@ -102,6 +214,8 @@ async function deleteFirebaseAppointment(id) {
     }
 }
 
+// ========== AUTH & UI ==========
+
 function isLoggedIn() {
     return sessionStorage.getItem('gf_admin_logged') === 'true';
 }
@@ -122,12 +236,17 @@ function showDashboard() {
     loadDoctorsTable();
     loadAppointmentsTable();
     loadSettingsForm();
-    syncOnlineAppointments(); // Pull live cloud appointments
+
+    // Pull latest cloud data across all devices
+    syncSettingsFromFirebase();
+    syncDoctorsFromFirebase();
+    syncOnlineAppointments();
 }
 
 // Login
-document.getElementById('loginForm').addEventListener('submit', function(e) {
+document.getElementById('loginForm').addEventListener('submit', async function(e) {
     e.preventDefault();
+    await syncSettingsFromFirebase(); // Ensure latest password is checked
     const password = document.getElementById('adminPassword').value;
     const settings = getSettings();
     if (password === settings.password) {
@@ -214,8 +333,8 @@ function loadDoctorsTable() {
             <td class="px-6 py-4 text-gray-600">${doc.specialty}</td>
             <td class="px-6 py-4 text-gray-600">${doc.phone || '—'}</td>
             <td class="px-6 py-4 text-right">
-                <button onclick="editDoctor(${doc.id})" class="text-teal-600 hover:text-teal-700 mr-3 text-sm font-medium">Edit</button>
-                <button onclick="deleteDoctor(${doc.id})" class="text-red-500 hover:text-red-600 text-sm font-medium">Delete</button>
+                <button onclick="editDoctor('${doc.id}')" class="text-teal-600 hover:text-teal-700 mr-3 text-sm font-medium">Edit</button>
+                <button onclick="deleteDoctor('${doc.id}')" class="text-red-500 hover:text-red-600 text-sm font-medium">Delete</button>
             </td>
         </tr>
     `).join('');
@@ -232,7 +351,7 @@ document.getElementById('addDoctorBtn').addEventListener('click', () => {
 document.getElementById('closeModal').addEventListener('click', () => modal.classList.add('hidden'));
 document.getElementById('cancelModal').addEventListener('click', () => modal.classList.add('hidden'));
 
-doctorForm.addEventListener('submit', function(e) {
+doctorForm.addEventListener('submit', async function(e) {
     e.preventDefault();
     const id = document.getElementById('doctorId').value;
     const doctors = getDoctors();
@@ -243,13 +362,15 @@ doctorForm.addEventListener('submit', function(e) {
         bio: document.getElementById('doctorBio').value.trim()
     };
     if (id) {
-        const index = doctors.findIndex(d => d.id == id);
+        const index = doctors.findIndex(d => String(d.id) === String(id));
         if (index !== -1) {
             doctors[index] = { ...doctors[index], ...doctorData };
+            await pushDoctorToFirebase(doctors[index]);
         }
     } else {
-        doctorData.id = Date.now();
+        doctorData.id = String(Date.now());
         doctors.push(doctorData);
+        await pushDoctorToFirebase(doctorData);
     }
     saveDoctors(doctors);
     loadDoctorsTable();
@@ -259,7 +380,7 @@ doctorForm.addEventListener('submit', function(e) {
 
 function editDoctor(id) {
     const doctors = getDoctors();
-    const doc = doctors.find(d => d.id == id);
+    const doc = doctors.find(d => String(d.id) === String(id));
     if (!doc) return;
     document.getElementById('modalTitle').textContent = 'Edit Doctor';
     document.getElementById('doctorId').value = doc.id;
@@ -270,11 +391,12 @@ function editDoctor(id) {
     modal.classList.remove('hidden');
 }
 
-function deleteDoctor(id) {
+async function deleteDoctor(id) {
     if (!confirm('Are you sure you want to remove this doctor?')) return;
     let doctors = getDoctors();
-    doctors = doctors.filter(d => d.id != id);
+    doctors = doctors.filter(d => String(d.id) !== String(id));
     saveDoctors(doctors);
+    await deleteDoctorFromFirebase(id);
     loadDoctorsTable();
     loadOverview();
 }
@@ -371,7 +493,7 @@ function viewAppointment(id) {
     const appointments = getAppointments();
     const a = appointments.find(x => x.id == id);
     if (!a) return;
-    alert(`Patient: ${a.name}\nPhone: ${a.phone}\nEmail: ${a.email || 'N/A'}\nDoctor: ${a.doctor}\nDate: ${a.date}\nTime: ${a.time}\nPayment Method: ${a.paymentMethod || 'N/A'}\nPayment Status: ${a.paymentStatus || 'N/A'}\nMessage: ${a.message || 'None'}Status: ${a.status}`);
+    alert(`Patient: ${a.name}\nPhone: ${a.phone}\nEmail: ${a.email || 'N/A'}\nDoctor: ${a.doctor}\nDate: ${a.date}\nTime: ${a.time}\nPayment Method: ${a.paymentMethod || 'N/A'}\nPayment Status: ${a.paymentStatus || 'N/A'}\nMessage: ${a.message || 'None'}\nStatus: ${a.status}`);
 }
 
 function sendReminder(id) {
@@ -413,7 +535,7 @@ function loadSettingsForm() {
     if (loginName) loginName.textContent = s.name;
 }
 
-document.getElementById('settingsForm').addEventListener('submit', function(e) {
+document.getElementById('settingsForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     const settings = {
         name: document.getElementById('settingName').value.trim(),
@@ -427,6 +549,8 @@ document.getElementById('settingsForm').addEventListener('submit', function(e) {
         password: document.getElementById('settingPassword').value.trim()
     };
     saveSettings(settings);
+    await pushSettingsToFirebase(settings);
+
     const success = document.getElementById('settingsSuccess');
     success.classList.remove('hidden');
     setTimeout(() => success.classList.add('hidden'), 3000);
@@ -434,34 +558,17 @@ document.getElementById('settingsForm').addEventListener('submit', function(e) {
 });
 
 // Init
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     if (!localStorage.getItem('gf_settings')) {
-        localStorage.setItem('gf_settings', JSON.stringify({
-            name: "Goodfaith Hospital Ltd",
-            phone: "+234 800 000 0000",
-            whatsapp: "2348000000000",
-            address: "Lagos, Nigeria",
-            hours: "Mon - Sat: 8:00 AM - 6:00 PM",
-            password: "admin123",
-            bankName: "Zenith Bank",
-            accountName: "Goodfaith Hospital Ltd",
-            accountNumber: "1234567890"
-        }));
+        localStorage.setItem('gf_settings', JSON.stringify(DEFAULT_SETTINGS));
     }
     if (!localStorage.getItem('gf_doctors') || JSON.parse(localStorage.getItem('gf_doctors')).length === 0) {
-        const defaultDoctors = [
-            { id: 1, name: "Dr. Amara Okeke", specialty: "Consultant Cardiologist", phone: "08012345671", bio: "Expert in heart-related conditions with over 12 years experience." },
-            { id: 2, name: "Dr. Chinedu Eze", specialty: "Orthopedic Surgeon", phone: "08012345672", bio: "Specializes in bone, joint and sports injuries." },
-            { id: 3, name: "Dr. Fatima Bello", specialty: "Pediatrician", phone: "08012345673", bio: "Dedicated to the health and wellness of children." },
-            { id: 4, name: "Dr. Tunde Adebayo", specialty: "Consultant Neurologist", phone: "08012345674", bio: "Expert in brain and nervous system disorders." },
-            { id: 5, name: "Dr. Ngozi Nwosu", specialty: "Obstetrician & Gynecologist", phone: "08012345675", bio: "Specialist in women's health and maternity care." },
-            { id: 6, name: "Dr. Ibrahim Yusuf", specialty: "General Physician", phone: "08012345676", bio: "First point of care for general health concerns." }
-        ];
-        localStorage.setItem('gf_doctors', JSON.stringify(defaultDoctors));
+        localStorage.setItem('gf_doctors', JSON.stringify(DEFAULT_DOCTORS));
     }
     if (!localStorage.getItem('gf_appointments')) {
         localStorage.setItem('gf_appointments', JSON.stringify([]));
     }
+    await syncSettingsFromFirebase();
     if (isLoggedIn()) {
         showDashboard();
     } else {
